@@ -27,6 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 
 add_library(${PROJECT_NAME}_core
+  src/direction_switch.cpp
   src/decision_map.cpp
   src/frontier_suppression.cpp
   src/frontier_policy.cpp
@@ -36,6 +37,7 @@ add_library(${PROJECT_NAME}_core
   src/frontier_explorer_core_frontiers.cpp
   src/frontier_explorer_core_suppression.cpp
   src/frontier_explorer_core_dispatch.cpp
+  src/frontier_path_selection.cpp
   src/mrtsp_ordering.cpp
   src/mrtsp_solver.cpp
 )
@@ -52,6 +54,7 @@ ament_target_dependencies(${PROJECT_NAME}_core
 
 add_library(${PROJECT_NAME}_node
   src/frontier_explorer_node.cpp
+  src/frontier_path_evaluation.cpp
 )
 target_include_directories(${PROJECT_NAME}_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -168,6 +171,8 @@ install(
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_direction_switch test/test_direction_switch.cpp)
+  target_link_libraries(test_direction_switch ${PROJECT_NAME}_core)
 
   ament_add_gtest(test_frontier_snapshot_and_search
     test/test_frontier_snapshot_and_search.cpp

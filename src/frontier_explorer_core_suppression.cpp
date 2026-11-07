@@ -65,15 +65,67 @@ FrontierSequence FrontierExplorerCore::filter_frontiers_for_suppression(
   const FrontierSequence & frontiers)
 {
   const int64_t now_ns = callbacks.now_ns();
-  if (!suppression_runtime_active(now_ns)) {
-    return frontiers;
+  FrontierSequence filtered = frontiers;
+  if (suppression_runtime_active(now_ns)) {
+    FrontierSuppression * suppression = ensure_frontier_suppression();
+    if (suppression) {
+      suppression->prune_expired(now_ns);
+      filtered = suppression->filter_frontiers(filtered);
+    }
   }
-  FrontierSuppression * suppression = ensure_frontier_suppression();
-  if (!suppression) {
-    return frontiers;
+  if (!params.direction_switch_enabled) {
+    return filtered;
   }
-  suppression->prune_expired(now_ns);
-  return suppression->filter_frontiers(frontiers);
+  const auto pose = callbacks.get_current_pose();
+  if (!pose) {
+    return {};
+  }
+  std::vector<DirectionSwitch::XY> targets;
+  targets.reserve(filtered.size());
+  for (const auto & frontier : filtered) {
+    targets.push_back(frontier_position(frontier));
+  }
+  const auto indices = direction_switch.select(
+    targets, {pose->position.x, pose->position.y}, now_ns);
+  FrontierSequence selected;
+  selected.reserve(indices.size());
+  for (const auto index : indices) {
+    selected.push_back(filtered[index]);
+  }
+  return selected;
+}
+
+bool FrontierExplorerCore::evaluate_direction_stall(bool new_goal)
+{
+  if (!params.direction_switch_enabled || !exploration_enabled ||
+    goal_state != GoalLifecycleState::ACTIVE || active_goal_kind != "frontier" ||
+    !active_goal_pose || !goal_handle || cancel_request_in_progress)
+  {
+    return false;
+  }
+  const auto pose = callbacks.get_current_pose();
+  if (!pose) {
+    direction_switch.suspend_progress();
+    return false;
+  }
+  const auto & target = active_goal_pose->pose.position;
+  if (new_goal) {
+    direction_switch.begin_goal({pose->position.x, pose->position.y},
+      {target.x, target.y}, callbacks.now_ns());
+  }
+  if (!direction_switch.observe({pose->position.x, pose->position.y},
+      {target.x, target.y}, callbacks.now_ns()))
+  {
+    return false;
+  }
+  // A previously queued lateral replacement must not bypass the new direction filter.
+  pending_frontier_sequence.clear();
+  pending_frontier_selection_mode.clear();
+  pending_frontier_dispatch_context.clear();
+  callbacks.log_warn("Frontier direction switch: local position stalled; avoiding target direction "
+    "+/-60 deg and preferring opposite frontiers (>=120 deg)");
+  request_active_goal_cancel("Canceling stalled frontier to change exploration direction");
+  return true;
 }
 
 void FrontierExplorerCore::record_failed_frontier_attempt(

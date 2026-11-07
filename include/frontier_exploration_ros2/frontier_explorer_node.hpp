@@ -25,6 +25,7 @@ limitations under the License.
 
 #include <geometry_msgs/msg/pose.hpp>
 #include <nav2_msgs/action/navigate_to_pose.hpp>
+#include <nav2_msgs/action/compute_path_to_pose.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -54,6 +55,8 @@ public:
 private:
   using NavigateToPose = nav2_msgs::action::NavigateToPose;
   using NavigateGoalHandle = rclcpp_action::ClientGoalHandle<NavigateToPose>;
+  using ComputePath = nav2_msgs::action::ComputePathToPose;
+  using PathGoalHandle = rclcpp_action::ClientGoalHandle<ComputePath>;
 
   void occupancyGridCallback(const nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg);
   void costmapCallback(const nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg);
@@ -71,6 +74,24 @@ private:
   bool maybeFinalizeMapProcessingRateEstimate();
 
   void dispatchGoalRequest(const GoalDispatchRequest & request);
+  void sendNavigateGoal(const GoalDispatchRequest & request);
+  void evaluateNextPath();
+  void cancelPathEvaluation();
+  void pathEvaluationTick();
+  struct PathEvaluation
+  {
+    GoalDispatchRequest request;
+    std::vector<geometry_msgs::msg::PoseStamped> goals;
+    // -1 = no path; -2 = unavailable/timeout, never counted as obstacle evidence.
+    std::vector<double> lengths;
+    std::size_t index{0};
+    std::chrono::steady_clock::time_point deadline;
+    PathGoalHandle::SharedPtr handle;
+  };
+  std::shared_ptr<PathEvaluation> path_evaluation_;
+  rclcpp_action::Client<ComputePath>::SharedPtr path_client_;
+  rclcpp::TimerBase::SharedPtr path_evaluation_timer_;
+  double path_evaluation_timeout_s_{1.5};
   void createMapSubscription(rclcpp::DurabilityPolicy map_durability);
   void mapAutodetectTimeoutCallback();
   void logMapAutodetectStart(rclcpp::DurabilityPolicy selected_durability);

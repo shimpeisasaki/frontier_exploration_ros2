@@ -267,6 +267,26 @@ FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
   navigate_to_pose_client_ = rclcpp_action::create_client<NavigateToPose>(
     this,
     params_.navigate_to_pose_action_name);
+  params_.path_evaluation_candidate_limit = declare_parameter("path_evaluation_candidate_limit", 0);
+  params_.direction_switch_enabled = declare_parameter("direction_switch_enabled", false);
+  params_.direction_switch_config.stall_timeout_s = declare_parameter("direction_stall_timeout_s", 15.0);
+  params_.direction_switch_config.progress_distance_m = declare_parameter("direction_progress_distance_m", 0.5);
+  params_.direction_switch_config.avoidance_duration_s = declare_parameter("direction_avoidance_duration_s", 90.0);
+  params_.direction_switch_config.locality_radius_m = declare_parameter("direction_locality_radius_m", 3.0);
+  path_evaluation_timeout_s_ = declare_parameter("path_evaluation_timeout_s", 1.5);
+  const auto planner_action = declare_parameter<std::string>(
+    "path_evaluation_action_name", "compute_path_to_pose");
+  if (params_.path_evaluation_candidate_limit < 0 || params_.path_evaluation_candidate_limit > 10 ||
+    !std::isfinite(path_evaluation_timeout_s_) || path_evaluation_timeout_s_ < 0.1 ||
+    path_evaluation_timeout_s_ > 5.0 || planner_action.empty())
+  {
+    throw std::invalid_argument("Invalid frontier path evaluation settings");
+  }
+  if (params_.path_evaluation_candidate_limit > 0) {
+    path_client_ = rclcpp_action::create_client<ComputePath>(this, planner_action);
+    path_evaluation_timer_ = create_wall_timer(
+      std::chrono::milliseconds(50), [this]() {pathEvaluationTick();});
+  }
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
   if (completion_event_config_.enabled) {
@@ -563,8 +583,8 @@ void FrontierExplorerNode::startExplorationRuntime()
         "Frontier suppression startup grace period elapsed; suppression is now active");
       suppression_activation_logged_ = true;
     }
-    ensureWatchdogTimer();
   }
+  ensureWatchdogTimer();
 
   createMapSubscription(topic_qos_profiles_.map_durability);
   costmap_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
@@ -606,12 +626,13 @@ void FrontierExplorerNode::startExplorationRuntime()
 
 void FrontierExplorerNode::ensureWatchdogTimer()
 {
-  if (!params_.frontier_suppression_enabled || suppression_watchdog_timer_) {
+  if ((!params_.frontier_suppression_enabled && !params_.direction_switch_enabled) || suppression_watchdog_timer_) {
     return;
   }
 
   const double watchdog_period_s = std::clamp(
-    params_.frontier_suppression_no_progress_timeout_s / 4.0,
+    std::min(params_.frontier_suppression_no_progress_timeout_s,
+    params_.direction_switch_config.stall_timeout_s) / 4.0,
     0.25,
     1.0);
   suppression_watchdog_timer_ = this->create_wall_timer(
@@ -728,6 +749,7 @@ void FrontierExplorerNode::requestStopExplorationRuntime(
 {
   ensureControlTimerCanceled();
   pending_quit_after_stop_ = quit_after_stop;
+  cancelPathEvaluation();
   core_->stop_exploration_session(reason);
   publishFrontierMarkers({});
   enterColdIdle();
@@ -1063,7 +1085,9 @@ void FrontierExplorerNode::suppressionWatchdogCallback()
   }
 
   if (core_) {
-    core_->evaluate_active_goal_progress_timeout();
+    if (!core_->evaluate_direction_stall()) {
+      core_->evaluate_active_goal_progress_timeout();
+    }
   }
 }
 
@@ -1272,7 +1296,7 @@ bool FrontierExplorerNode::debugOutputsEnabled() const
     RCUTILS_LOG_SEVERITY_DEBUG);
 }
 
-void FrontierExplorerNode::dispatchGoalRequest(const GoalDispatchRequest & request)
+void FrontierExplorerNode::sendNavigateGoal(const GoalDispatchRequest & request)
 {
   NavigateToPose::Goal goal_request;
   // Core provides fully prepared pose/action metadata in request.

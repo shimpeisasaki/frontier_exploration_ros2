@@ -34,6 +34,7 @@ limitations under the License.
 #include "frontier_exploration_ros2/decision_map.hpp"
 #include "frontier_exploration_ros2/mrtsp_ordering.hpp"
 #include "frontier_exploration_ros2/frontier_types.hpp"
+#include "frontier_exploration_ros2/direction_switch.hpp"
 
 namespace frontier_exploration_ros2
 {
@@ -66,6 +67,10 @@ struct FrontierExplorerCoreParams
   std::string costmap_topic{"global_costmap/costmap"};
   std::string local_costmap_topic{"local_costmap/costmap"};
   std::string navigate_to_pose_action_name{"navigate_to_pose"};
+  // Optional node-side Nav2 evaluation; replacements first terminate the old goal.
+  int path_evaluation_candidate_limit{0};
+  bool direction_switch_enabled{false};
+  DirectionSwitchConfig direction_switch_config;
   std::string global_frame{"map"};
   std::string robot_base_frame{"base_footprint"};
   std::string frontier_marker_topic{"explore/frontiers"};
@@ -303,6 +308,12 @@ public:
     const std::string & description);
 
   void clear_active_goal_state();
+  // Complete optional transport-side path evaluation without losing goal identity.
+  std::optional<GoalDispatchRequest> apply_path_evaluation(
+    const GoalDispatchRequest & request,
+    const std::vector<geometry_msgs::msg::PoseStamped> & goals,
+    const std::vector<double> & lengths);
+  void cancel_path_evaluation(int dispatch_id);
 
   void goal_response_callback(
     int dispatch_id,
@@ -319,6 +330,7 @@ public:
 
   void feedback_callback(double distance_remaining, int dispatch_id);
   bool evaluate_active_goal_progress_timeout();
+  bool evaluate_direction_stall(bool new_goal = false);
 
   void publish_frontier_markers(const FrontierSequence & frontiers);
 
@@ -345,6 +357,7 @@ public:
   // Configuration and host integration hooks.
   FrontierExplorerCoreParams params;
   FrontierExplorerCoreCallbacks callbacks;
+  DirectionSwitch direction_switch;
 
   // Latest map/costmap snapshots and monotonic generation counters.
   std::optional<OccupancyGrid2d> map;
