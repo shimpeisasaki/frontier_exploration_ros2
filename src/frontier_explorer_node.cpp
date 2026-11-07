@@ -587,14 +587,26 @@ void FrontierExplorerNode::startExplorationRuntime()
   ensureWatchdogTimer();
 
   createMapSubscription(topic_qos_profiles_.map_durability);
-  costmap_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
-    params_.costmap_topic,
-    topic_qos_profiles_.make_costmap_qos(),
-    std::bind(&FrontierExplorerNode::costmapCallback, this, std::placeholders::_1));
-  local_costmap_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
-    params_.local_costmap_topic,
-    topic_qos_profiles_.make_local_costmap_qos(),
-    std::bind(&FrontierExplorerNode::localCostmapCallback, this, std::placeholders::_1));
+  const bool shared_constraints =
+    get_node_topics_interface()->resolve_topic_name(params_.costmap_topic) ==
+    get_node_topics_interface()->resolve_topic_name(params_.local_costmap_topic) &&
+    topic_qos_profiles_.make_costmap_qos() == topic_qos_profiles_.make_local_costmap_qos();
+  if (shared_constraints) {
+    costmap_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
+      params_.costmap_topic, topic_qos_profiles_.make_costmap_qos(),
+      [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) {
+        if (runtime_state_ == RuntimeState::RUNNING && core_) {
+          core_->sharedCostmapCallback(OccupancyGrid2d(msg));
+        }
+      });
+  } else {
+    costmap_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
+      params_.costmap_topic, topic_qos_profiles_.make_costmap_qos(),
+      std::bind(&FrontierExplorerNode::costmapCallback, this, std::placeholders::_1));
+    local_costmap_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
+      params_.local_costmap_topic, topic_qos_profiles_.make_local_costmap_qos(),
+      std::bind(&FrontierExplorerNode::localCostmapCallback, this, std::placeholders::_1));
+  }
   if (params_.map_processing_rate_hz > 0.0) {
     if (effective_map_processing_rate_hz_.has_value()) {
       ensureMapProcessingTimer();

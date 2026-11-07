@@ -139,6 +139,22 @@ std::unique_ptr<FrontierExplorerCore> make_preemption_core(std::vector<std::stri
 }
 
 // Replacement and cancellation policy behavior.
+TEST(PreemptionFlowTests, SharedConstraintSnapshotUpdatesBothViewsBeforeCancel)
+{
+  auto core = make_preemption_core();
+  auto handle = std::make_shared<FakeGoalHandle>();
+  core->goal_handle = handle;
+  auto msg = build_grid(20, 20, 0);
+  msg.data[1 * 20 + 1] = 100;
+  core->sharedCostmapCallback(OccupancyGrid2d(msg));
+  ASSERT_TRUE(core->costmap.has_value());
+  ASSERT_TRUE(core->local_costmap.has_value());
+  EXPECT_EQ(core->costmap->map().data, core->local_costmap->map().data);
+  EXPECT_EQ(handle->cancel_calls, 1);
+  EXPECT_TRUE(core->pending_costmap_search_input_update);
+  EXPECT_TRUE(core->pending_local_costmap_search_input_update);
+}
+
 TEST(PreemptionFlowTests, ReselectionReplacementDispatchesWithoutCancel)
 {
   std::vector<std::string> info_logs;

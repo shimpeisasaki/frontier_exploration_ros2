@@ -167,6 +167,7 @@ public:
   void occupancyGridCallback(const OccupancyGrid2d & map_msg);
   void costmapCallback(const OccupancyGrid2d & map_msg);
   void localCostmapCallback(const OccupancyGrid2d & map_msg);
+  void sharedCostmapCallback(const OccupancyGrid2d & map_msg);
   void ingestRawMapUpdate(const OccupancyGrid2d & map_msg);
   void handleUrgentRawMapUpdateForActiveGoal();
   void processPendingMapUpdate();
@@ -469,6 +470,7 @@ public:
   bool shutdown_requested{false};
 
 private:
+  void updateCostmaps(const OccupancyGrid2d & map_msg, bool update_global, bool update_local);
   struct DispatchContext
   {
     std::string goal_kind;

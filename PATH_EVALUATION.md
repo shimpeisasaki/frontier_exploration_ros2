@@ -91,3 +91,13 @@ lateral target changes still do not reset progress. Expiration/removal of the
 last local avoidance record also starts a fresh trial window. Existing direction
 records remain effective during a direction change. Three regression tests cover
 opposite-target acceptance, nearby-target rejection and retry after cooldown.
+# Shared constraint-map transport — 2026-11-08
+
+When global/local constraint topics resolve to the same name and have identical
+QoS, the explorer now uses one subscription. One core update installs both views
+before checking an active goal or dispatching another one. Separate topics or
+different QoS keep separate subscriptions. Local/global updates share the same
+implementation; direction switching, planner evaluation, cancellation deadlines
+and goal policy are unchanged. The shared-snapshot regression verifies that a
+new hazard updates both views and requests exactly one active-goal cancellation.
+
