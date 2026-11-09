@@ -24,6 +24,8 @@ find_package(visualization_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ControlExploration.srv"
+  "srv/GetFrontierCandidates.srv"
+  DEPENDENCIES geometry_msgs
 )
 
 add_library(${PROJECT_NAME}_core

@@ -63,6 +63,7 @@ struct GoalDispatchRequest
 // Runtime behavior knobs for frontier selection, goal updates, and settle policy.
 struct FrontierExplorerCoreParams
 {
+  bool candidate_provider_only{false};
   std::string map_topic{"map"};
   std::string costmap_topic{"global_costmap/costmap"};
   std::string local_costmap_topic{"local_costmap/costmap"};

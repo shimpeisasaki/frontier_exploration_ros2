@@ -362,7 +362,33 @@ FrontierExplorerNode::FrontierExplorerNode(const rclcpp::NodeOptions & options)
   callbacks.log_error = [this](const std::string & message) {
       RCLCPP_ERROR(this->get_logger(), "%s", message.c_str());
     };
+  params_.candidate_provider_only = declare_parameter("candidate_provider_only", false);
   core_ = std::make_unique<FrontierExplorerCore>(params_, callbacks);
+  if (params_.candidate_provider_only) {
+    candidate_service_ = create_service<srv::GetFrontierCandidates>(
+      "get_candidates", [this](const srv::GetFrontierCandidates::Request::SharedPtr request,
+        srv::GetFrontierCandidates::Response::SharedPtr response) {
+        const auto pose = getCurrentPose();
+        if (!pose || !core_->map || !core_->costmap) {
+          response->message = "Map, constraints or pose unavailable"; return;
+        }
+        try {
+          core_->processPendingMapUpdate();
+          auto snapshot = core_->get_frontier_snapshot(*pose, 0.);
+          auto ranked = core_->build_mrtsp_frontier_sequence(snapshot.frontiers, *pose);
+          response->revision = core_->decision_map_generation;
+          const size_t limit = request->max_candidates ? std::min<size_t>(request->max_candidates, 256) : 64;
+          for (size_t i = 0; i < std::min(limit, ranked.size()); ++i) {
+            response->candidates.push_back(core_->build_goal_pose(ranked[i], *pose));
+            const auto xy = core_->frontier_reference_point(ranked[i]);
+            response->region_ids.push_back(std::to_string(std::llround(xy.first * 2)) + ":" +
+              std::to_string(std::llround(xy.second * 2)));
+          }
+          publishFrontierMarkers(ranked);
+          response->ready = true;
+        } catch (const std::exception & e) {response->message = e.what();}
+      });
+  }
   runtime_state_ = RuntimeState::COLD_IDLE;
   if (!autostart_) {
     core_->stop_exploration_session("Frontier exploration initialized in cold idle mode");

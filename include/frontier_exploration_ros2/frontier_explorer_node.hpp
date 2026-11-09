@@ -35,6 +35,7 @@ limitations under the License.
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include "frontier_exploration_ros2/srv/control_exploration.hpp"
+#include "frontier_exploration_ros2/srv/get_frontier_candidates.hpp"
 #include "frontier_exploration_ros2/qos_utils.hpp"
 #include "frontier_exploration_ros2/frontier_explorer_core.hpp"
 
@@ -92,6 +93,7 @@ private:
   rclcpp_action::Client<ComputePath>::SharedPtr path_client_;
   rclcpp::TimerBase::SharedPtr path_evaluation_timer_;
   double path_evaluation_timeout_s_{1.5};
+  rclcpp::Service<srv::GetFrontierCandidates>::SharedPtr candidate_service_;
   void createMapSubscription(rclcpp::DurabilityPolicy map_durability);
   void mapAutodetectTimeoutCallback();
   void logMapAutodetectStart(rclcpp::DurabilityPolicy selected_durability);

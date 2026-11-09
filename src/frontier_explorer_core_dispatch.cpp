@@ -31,6 +31,7 @@ namespace frontier_exploration_ros2
 
 void FrontierExplorerCore::try_send_next_goal()
 {
+  if (params.candidate_provider_only) {return;}
   // Main scheduler entrypoint: exits early unless maps, pose, and lifecycle gates are ready.
   if (!exploration_enabled) {
     return;
