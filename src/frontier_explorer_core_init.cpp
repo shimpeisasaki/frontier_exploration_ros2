@@ -30,7 +30,8 @@ namespace frontier_exploration_ros2
 FrontierExplorerCore::FrontierExplorerCore(
   FrontierExplorerCoreParams params_in,
   FrontierExplorerCoreCallbacks callbacks_in)
-: params(std::move(params_in)), callbacks(std::move(callbacks_in))
+: params(std::move(params_in)), callbacks(std::move(callbacks_in)),
+  direction_switch(params.direction_switch_config)
 {
   params.all_frontiers_suppressed_behavior = detail::normalize_suppressed_behavior(
     params.all_frontiers_suppressed_behavior);

@@ -189,82 +189,51 @@ void FrontierExplorerCore::occupancyGridCallback(const OccupancyGrid2d & map_msg
 
 void FrontierExplorerCore::costmapCallback(const OccupancyGrid2d & map_msg)
 {
-  if (active_frontier_goal_in_progress()) {
-    costmap = map_msg;
-    pending_costmap_search_input_update = true;
-
-    const auto active_goal_cost_status = params.goal_skip_on_blocked_goal ?
-      frontier_cost_status(active_goal_frontier) : std::optional<std::string>{};
-
-    if (active_goal_cost_status.has_value()) {
-      active_goal_blocked_reason = *active_goal_cost_status;
-      request_active_goal_cancel(*active_goal_cost_status);
-    } else {
-      active_goal_blocked_reason.reset();
-    }
-
-    return;
-  }
-
-  if (goal_in_progress && active_goal_kind == "suppressed_return_to_start") {
-    costmap = map_msg;
-    pending_costmap_search_input_update = true;
-    consider_cancel_suppressed_return_to_start();
-    return;
-  }
-
-  const bool costmap_changed = !same_costmap_search_input(costmap, map_msg);
-  costmap = map_msg;
-
-  if (costmap_changed) {
-    pending_costmap_search_input_update = true;
-  }
-
-  commit_deferred_costmap_search_input_updates();
-
-  if (params.map_processing_rate_hz <= 0.0 || !decision_map_dirty) {
-    try_send_next_goal();
-  }
+  updateCostmaps(map_msg, true, false);
 }
 
 void FrontierExplorerCore::localCostmapCallback(const OccupancyGrid2d & map_msg)
 {
-  if (active_frontier_goal_in_progress()) {
+  updateCostmaps(map_msg, false, true);
+}
+
+void FrontierExplorerCore::sharedCostmapCallback(const OccupancyGrid2d & map_msg)
+{
+  updateCostmaps(map_msg, true, true);
+}
+
+void FrontierExplorerCore::updateCostmaps(
+  const OccupancyGrid2d & map_msg, bool update_global, bool update_local)
+{
+  const bool active = active_frontier_goal_in_progress();
+  const bool returning = goal_in_progress && active_goal_kind == "suppressed_return_to_start";
+  if (update_global) {
+    const bool changed = active || returning || !same_costmap_search_input(costmap, map_msg);
+    costmap = map_msg;
+    pending_costmap_search_input_update |= changed;
+  }
+  if (update_local) {
+    const bool changed = active || returning || !same_costmap_search_input(local_costmap, map_msg);
     local_costmap = map_msg;
-    pending_local_costmap_search_input_update = true;
-
-    const auto active_goal_cost_status = params.goal_skip_on_blocked_goal ?
+    pending_local_costmap_search_input_update |= changed;
+  }
+  // Install both views before inspecting/canceling the active goal or dispatching
+  // a new one. Identical topic configurations need one DDS subscription and one
+  // state transition, rather than two callbacks with a half-updated snapshot.
+  if (active) {
+    const auto blocked = params.goal_skip_on_blocked_goal ?
       frontier_cost_status(active_goal_frontier) : std::optional<std::string>{};
-
-    if (active_goal_cost_status.has_value()) {
-      active_goal_blocked_reason = *active_goal_cost_status;
-      request_active_goal_cancel(*active_goal_cost_status);
+    if (blocked) {
+      active_goal_blocked_reason = *blocked;
+      request_active_goal_cancel(*blocked);
     } else {
       active_goal_blocked_reason.reset();
     }
-
     return;
   }
-
-  if (goal_in_progress && active_goal_kind == "suppressed_return_to_start") {
-    local_costmap = map_msg;
-    pending_local_costmap_search_input_update = true;
-    consider_cancel_suppressed_return_to_start();
-    return;
-  }
-
-  const bool local_costmap_changed = !same_costmap_search_input(local_costmap, map_msg);
-  local_costmap = map_msg;
-
-  if (local_costmap_changed) {
-    pending_local_costmap_search_input_update = true;
-  }
-
+  if (returning) {consider_cancel_suppressed_return_to_start(); return;}
   commit_deferred_costmap_search_input_updates();
-
-  if (params.map_processing_rate_hz <= 0.0 || !decision_map_dirty) {
-    try_send_next_goal();
-  }
+  if (params.map_processing_rate_hz <= 0.0 || !decision_map_dirty) {try_send_next_goal();}
 }
 
 }  // namespace frontier_exploration_ros2

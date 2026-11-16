@@ -1,5 +1,9 @@
 # frontier_exploration_ros2
 
+CAT workspace users: [local adoption, candidate interface and maintenance](LOCAL_MAINTENANCE.md)
+and [reproducible dependency patches](../recovery_exploration/patches/README.md).
+The upstream documentation below also covers modes that CAT does not select.
+
 [![Contributors](https://img.shields.io/github/contributors/mertgulerx/frontier-exploration-ros2?style=for-the-badge)](https://github.com/mertgulerx/frontier-exploration-ros2/graphs/contributors)
 [![Stars](https://img.shields.io/github/stars/mertgulerx/frontier-exploration-ros2?style=for-the-badge)](https://github.com/mertgulerx/frontier-exploration-ros2/stargazers)
 [![Issues](https://img.shields.io/github/issues/mertgulerx/frontier-exploration-ros2?style=for-the-badge)](https://github.com/mertgulerx/frontier-exploration-ros2/issues)

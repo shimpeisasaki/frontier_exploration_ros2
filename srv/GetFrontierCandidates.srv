@@ -1,0 +1,8 @@
+# Read-only ranked candidate supply; never starts or replaces navigation.
+uint32 max_candidates
+---
+bool ready
+string message
+uint64 revision
+geometry_msgs/PoseStamped[] candidates
+string[] region_ids

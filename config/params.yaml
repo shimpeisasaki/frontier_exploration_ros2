@@ -60,6 +60,19 @@ frontier_explorer:
     # Use `0.50` if your mapping is slow and you want lowest CPU usage.  
     map_processing_rate_hz: 1.0
 
+    # Optional dispatch-time Nav2 route evaluation. Zero retains upstream behavior.
+    # Evaluate only the first N entries of the existing MRTSP sequence, sequentially.
+    path_evaluation_candidate_limit: 0
+    path_evaluation_timeout_s: 1.5
+    path_evaluation_action_name: compute_path_to_pose
+
+    # Optional local direction change after physical progress stalls.
+    direction_switch_enabled: false
+    direction_stall_timeout_s: 15.0
+    direction_progress_distance_m: 0.5
+    direction_avoidance_duration_s: 90.0
+    direction_locality_radius_m: 3.0
+
     # Start exploration immediately at launch.
     autostart: true
 

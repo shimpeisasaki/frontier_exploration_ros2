@@ -139,6 +139,22 @@ std::unique_ptr<FrontierExplorerCore> make_preemption_core(std::vector<std::stri
 }
 
 // Replacement and cancellation policy behavior.
+TEST(PreemptionFlowTests, SharedConstraintSnapshotUpdatesBothViewsBeforeCancel)
+{
+  auto core = make_preemption_core();
+  auto handle = std::make_shared<FakeGoalHandle>();
+  core->goal_handle = handle;
+  auto msg = build_grid(20, 20, 0);
+  msg.data[1 * 20 + 1] = 100;
+  core->sharedCostmapCallback(OccupancyGrid2d(msg));
+  ASSERT_TRUE(core->costmap.has_value());
+  ASSERT_TRUE(core->local_costmap.has_value());
+  EXPECT_EQ(core->costmap->map().data, core->local_costmap->map().data);
+  EXPECT_EQ(handle->cancel_calls, 1);
+  EXPECT_TRUE(core->pending_costmap_search_input_update);
+  EXPECT_TRUE(core->pending_local_costmap_search_input_update);
+}
+
 TEST(PreemptionFlowTests, ReselectionReplacementDispatchesWithoutCancel)
 {
   std::vector<std::string> info_logs;
@@ -158,6 +174,26 @@ TEST(PreemptionFlowTests, ReselectionReplacementDispatchesWithoutCancel)
 
   EXPECT_EQ(dispatch_calls, 1);
   EXPECT_EQ(fake_handle->cancel_calls, 0);
+}
+
+TEST(PreemptionFlowTests, EvaluatedReplacementWaitsForPreviousGoalTermination)
+{
+  auto core = make_preemption_core();
+  core->params.path_evaluation_candidate_limit = 3;
+  auto handle = std::make_shared<FakeGoalHandle>();
+  core->goal_handle = handle;
+  int dispatches = 0;
+  core->callbacks.wait_for_action_server = [](double) {return true;};
+  core->callbacks.dispatch_goal_request = [&dispatches](const auto &) {++dispatches;};
+  const FrontierSequence replacement{make_frontier(3., 3.)};
+  core->request_frontier_reselection(replacement, make_pose(), "mrtsp", "test");
+  core->request_frontier_reselection(replacement, make_pose(), "mrtsp", "test");
+  EXPECT_EQ(handle->cancel_calls, 1);
+  EXPECT_EQ(dispatches, 0);
+  handle->resolve_cancel();
+  EXPECT_EQ(dispatches, 0);
+  core->get_result_callback(1, action_msgs::msg::GoalStatus::STATUS_CANCELED, 0, "");
+  EXPECT_EQ(dispatches, 1);
 }
 
 TEST(PreemptionFlowTests, ThrottledMapProcessingCoalescesMultipleRawUpdatesIntoSingleProcessedRefresh)
@@ -398,6 +434,112 @@ TEST(PreemptionFlowTests, DispatchSkipsBlockedFrontierAndUsesNextSequenceTarget)
   EXPECT_TRUE(core.are_frontiers_equivalent(
     dispatched_request->frontier_sequence.front(),
     make_frontier(2.0, 2.0)));
+}
+
+TEST(PreemptionFlowTests, Nav2PathSelectionUsesRouteLengthAndUpdatesFailureIdentity)
+{
+  auto core = make_preemption_core();
+  core->params.frontier_suppression_enabled = true;
+  core->params.frontier_suppression_attempt_threshold = 1;
+  core->params.frontier_suppression_base_size_m = 0.2;
+  core->params.frontier_suppression_expansion_size_m = 0.1;
+  std::optional<GoalDispatchRequest> pending;
+  core->callbacks.wait_for_action_server = [](double) {return true;};
+  core->callbacks.dispatch_goal_request = [&pending](const auto & request) {pending = request;};
+  const FrontierSequence candidates{
+    make_frontier(3., 3., 10), make_frontier(7., 7., 10), make_frontier(12., 12., 10)};
+  ASSERT_TRUE(core->send_frontier_goal(candidates, make_pose(), "test"));
+  ASSERT_TRUE(pending);
+  const auto poses = core->build_goal_pose_sequence(candidates, make_pose());
+  const auto selected = core->apply_path_evaluation(*pending, poses, {30., 8., -1.});
+  ASSERT_TRUE(selected);
+  EXPECT_DOUBLE_EQ(selected->goal_pose.pose.position.x, 7.);
+  EXPECT_DOUBLE_EQ(core->active_goal_pose->pose.position.x, 7.);
+  ASSERT_TRUE(core->frontier_suppression_);
+  EXPECT_EQ(core->frontier_suppression_->filter_frontiers(candidates).size(), 2U);
+  core->goal_response_callback(selected->dispatch_id, nullptr, false, "test rejection");
+  const auto remaining = core->frontier_suppression_->filter_frontiers(candidates);
+  ASSERT_EQ(remaining.size(), 1U);
+  EXPECT_DOUBLE_EQ(remaining.front().goal_point->first, 3.);
+}
+
+TEST(PreemptionFlowTests, Nav2UnavailableDoesNotSuppressFrontiersOrDispatchUncheckedGoals)
+{
+  auto core = make_preemption_core();
+  core->params.frontier_suppression_enabled = true;
+  core->params.frontier_suppression_attempt_threshold = 1;
+  std::optional<GoalDispatchRequest> pending;
+  core->callbacks.wait_for_action_server = [](double) {return true;};
+  core->callbacks.dispatch_goal_request = [&pending](const auto & request) {pending = request;};
+  const FrontierSequence candidates{make_frontier(3., 3.), make_frontier(7., 7.)};
+  ASSERT_TRUE(core->send_frontier_goal(candidates, make_pose(), "test"));
+  ASSERT_TRUE(pending);
+  const auto poses = core->build_goal_pose_sequence(candidates, make_pose());
+  EXPECT_FALSE(core->apply_path_evaluation(*pending, poses, {-2., -2.}));
+  EXPECT_FALSE(core->goal_in_progress);
+  EXPECT_TRUE(core->awaiting_map_refresh);
+  EXPECT_EQ(core->suppression_attempt_count(), 0U);
+  EXPECT_FALSE(core->apply_path_evaluation(*pending, poses, {1., 2.}));
+}
+
+TEST(PreemptionFlowTests, CanceledPathEvaluationIgnoresLateResultsAndPreservesNewDispatch)
+{
+  auto core = make_preemption_core();
+  std::optional<GoalDispatchRequest> pending;
+  core->callbacks.wait_for_action_server = [](double) {return true;};
+  core->callbacks.dispatch_goal_request = [&pending](const auto & request) {pending = request;};
+  const FrontierSequence candidates{make_frontier(3., 3.)};
+  ASSERT_TRUE(core->send_frontier_goal(candidates, make_pose(), "test"));
+  const auto old = *pending;
+  core->pending_cancel_reason = "target became blocked during evaluation";
+  core->cancel_path_evaluation(old.dispatch_id);
+  EXPECT_FALSE(core->pending_cancel_reason);
+  ASSERT_TRUE(core->send_frontier_goal(candidates, make_pose(), "test"));
+  EXPECT_FALSE(core->apply_path_evaluation(old, {old.goal_pose}, {1.}));
+  EXPECT_TRUE(core->goal_in_progress);
+  EXPECT_EQ(core->current_dispatch_id, pending->dispatch_id);
+  EXPECT_TRUE(core->apply_path_evaluation(*pending, {pending->goal_pose}, {2.}));
+}
+
+TEST(PreemptionFlowTests, Nav2PathSelectionRetainsGainAndRejectsNewlyBlockedTargets)
+{
+  auto core = make_preemption_core();
+  std::optional<GoalDispatchRequest> pending;
+  core->callbacks.wait_for_action_server = [](double) {return true;};
+  core->callbacks.dispatch_goal_request = [&pending](const auto & request) {pending = request;};
+  const FrontierSequence candidates{make_frontier(3., 3., 1), make_frontier(7., 7., 100)};
+  ASSERT_TRUE(core->send_frontier_goal(candidates, make_pose(), "test"));
+  const auto poses = core->build_goal_pose_sequence(candidates, make_pose());
+  const auto selected = core->apply_path_evaluation(*pending, poses, {5., 10.});
+  ASSERT_TRUE(selected);
+  EXPECT_DOUBLE_EQ(selected->goal_pose.pose.position.x, 7.);
+  core->cancel_path_evaluation(pending->dispatch_id);
+  ASSERT_TRUE(core->send_frontier_goal(candidates, make_pose(), "test"));
+  auto updated = build_grid(20, 20, 0);
+  set_cell(updated, 7, 7, 100);
+  core->costmap = OccupancyGrid2d(updated);
+  const auto unblocked = core->apply_path_evaluation(*pending, poses, {5., 10.});
+  ASSERT_TRUE(unblocked);
+  EXPECT_DOUBLE_EQ(unblocked->goal_pose.pose.position.x, 3.);
+}
+
+TEST(PreemptionFlowTests, AllNav2PathsUnreachableWaitsAndRecordsEachCandidate)
+{
+  auto core = make_preemption_core();
+  core->params.frontier_suppression_enabled = true;
+  core->params.frontier_suppression_attempt_threshold = 1;
+  std::optional<GoalDispatchRequest> pending;
+  core->callbacks.wait_for_action_server = [](double) {return true;};
+  core->callbacks.dispatch_goal_request = [&pending](const auto & request) {pending = request;};
+  const FrontierSequence candidates{make_frontier(3., 3.), make_frontier(7., 7.)};
+  ASSERT_TRUE(core->send_frontier_goal(candidates, make_pose(), "test"));
+  EXPECT_FALSE(core->apply_path_evaluation(*pending,
+    core->build_goal_pose_sequence(candidates, make_pose()), {-1., -1.}));
+  EXPECT_FALSE(core->goal_in_progress);
+  EXPECT_TRUE(core->awaiting_map_refresh);
+  ASSERT_TRUE(core->frontier_suppression_);
+  EXPECT_TRUE(core->frontier_suppression_->filter_frontiers(candidates).empty());
+  EXPECT_FALSE(core->return_to_start_completed);
 }
 
 TEST(PreemptionFlowTests, MrtspDispatchAdjustsCloseTargetToClosestFarEnoughFreePoint)

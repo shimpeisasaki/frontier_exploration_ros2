@@ -31,6 +31,7 @@ namespace frontier_exploration_ros2
 
 void FrontierExplorerCore::try_send_next_goal()
 {
+  if (params.candidate_provider_only) {return;}
   // Main scheduler entrypoint: exits early unless maps, pose, and lifecycle gates are ready.
   if (!exploration_enabled) {
     return;
@@ -179,6 +180,7 @@ void FrontierExplorerCore::try_send_next_goal()
 
 void FrontierExplorerCore::reset_exploration_runtime_state(bool clear_maps)
 {
+  direction_switch.reset();
   clear_post_goal_wait_state();
   clear_active_goal_progress_state();
 
@@ -681,6 +683,12 @@ void FrontierExplorerCore::request_frontier_reselection(
   pending_frontier_dispatch_context = "reselected";
   callbacks.log_info(
     goal_update_log_prefix + ": " + reselection_reason);
+  if (params.path_evaluation_candidate_limit > 0) {
+    // Evaluation may take several seconds or fail entirely. Terminate the old
+    // action before taking away its ownership/handle for an evaluated replacement.
+    request_active_goal_cancel("Canceling current frontier before Nav2 path evaluation");
+    return;
+  }
   // Use Nav2's native action preemption path by sending the replacement goal directly.
   // Post-goal settle remains reserved for terminal result paths, not live replacements.
   dispatch_pending_frontier_goal(current_pose);
@@ -1054,6 +1062,9 @@ void FrontierExplorerCore::goal_response_callback(
     callbacks.log_info("Frontier goal accepted");
   }
   start_active_goal_progress_tracking();
+  if (evaluate_direction_stall(true)) {
+    return;
+  }
 
   if (pending_cancel_reason.has_value()) {
     // If cancel was requested while sending, execute cancel immediately after accept.

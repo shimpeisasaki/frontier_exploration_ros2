@@ -162,6 +162,52 @@ TEST(FrontierSuppressionTests, ThresholdCreatesRegionAndClearsAttempt)
   EXPECT_DOUBLE_EQ(suppression.regions().front().side_length_m, 2.0);
 }
 
+TEST(FrontierSuppressionCoreTests, PhysicalStallCancelsLateralQueueAndSelectsOpposite)
+{
+  int64_t now_ns = 0;
+  int dispatches = 0;
+  auto core = make_suppression_core(&now_ns, &dispatches);
+  core->params.direction_switch_enabled = true;
+  core->callbacks.get_current_pose = []() {
+      auto pose = make_pose(10., 10.);
+      pose.orientation.z = 1.;
+      pose.orientation.w = 0.;  // Heading is deliberately opposite the failed target.
+      return std::optional<geometry_msgs::msg::Pose>{pose};
+    };
+  core->callbacks.frontier_search = [](
+    const geometry_msgs::msg::Pose &, const OccupancyGrid2d &, const OccupancyGrid2d &,
+    const std::optional<OccupancyGrid2d> &, double, bool) {
+      FrontierSearchResult result;
+      result.frontiers = {make_candidate(17., 10.), make_candidate(17., 11.),
+        make_candidate(10., 17.), make_candidate(3., 10.)};
+      result.robot_map_cell = {10, 10};
+      return result;
+    };
+  std::optional<GoalDispatchRequest> sent;
+  core->callbacks.dispatch_goal_request = [&](const auto & request) {sent = request; ++dispatches;};
+  auto handle = std::make_shared<FakeGoalHandle>();
+  core->current_dispatch_id = 1;
+  core->active_goal_kind = "frontier";
+  core->active_goal_pose = geometry_msgs::msg::PoseStamped{};
+  core->active_goal_pose->pose = make_pose(17., 10.);
+  core->goal_response_callback(1, handle, true);
+  core->pending_frontier_sequence = {make_candidate(17., 11.)};
+  now_ns = 15'000'000'000;
+  ASSERT_TRUE(core->evaluate_direction_stall());
+  EXPECT_EQ(handle->cancel_calls, 1);
+  EXPECT_TRUE(core->pending_frontier_sequence.empty());
+  EXPECT_EQ(dispatches, 0);
+  handle->resolve_cancel();
+  core->get_result_callback(1, action_msgs::msg::GoalStatus::STATUS_CANCELED, 0, "");
+  core->try_send_next_goal();
+  ASSERT_TRUE(sent);
+  EXPECT_DOUBLE_EQ(sent->goal_pose.pose.position.x, 3.);
+  EXPECT_DOUBLE_EQ(sent->goal_pose.pose.position.y, 10.);
+  EXPECT_EQ(sent->frontier_sequence.size(), 1U);
+  core->stop_exploration_session();
+  EXPECT_EQ(core->direction_switch.record_count(), 0U);
+}
+
 TEST(FrontierSuppressionTests, ExpansionRingDoublesRegionAndMovesCenter)
 {
   FrontierSuppression suppression(FrontierSuppressionConfig{
